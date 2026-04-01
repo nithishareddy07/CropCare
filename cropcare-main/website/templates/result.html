@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CropCare - Detection Result</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #f3f8f2, #e8f5e9);
+            color: #1f2937;
+        }
+
+        .page {
+            max-width: 760px;
+            margin: 60px auto;
+            background: white;
+            border-radius: 18px;
+            padding: 32px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+            border-top: 6px solid #009b4d;
+        }
+
+        h1 {
+            margin-top: 0;
+            color: #009b4d;
+            text-align: center;
+        }
+
+        .uploaded-image {
+            display: block;
+            margin: 0 auto 24px auto;
+            max-width: 100%;
+            max-height: 320px;
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+            object-fit: contain;
+        }
+
+        .result-card {
+            background: #f0faf4;
+            border: 1px solid #bbf0d4;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin: 20px 0;
+        }
+
+        .result-card .label {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #4b7a5c;
+            margin-bottom: 4px;
+            font-weight: bold;
+        }
+
+        .result-card .value {
+            font-size: 22px;
+            font-weight: bold;
+            color: #1a3d2b;
+            margin-bottom: 16px;
+        }
+
+        .result-card .value:last-child {
+            margin-bottom: 0;
+        }
+
+        .healthy {
+            color: #009b4d;
+        }
+
+        .diseased {
+            color: #c0392b;
+        }
+
+        .confidence-bar-wrap {
+            background: #d1fae5;
+            border-radius: 99px;
+            height: 10px;
+            width: 100%;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+
+        .confidence-bar {
+            height: 100%;
+            border-radius: 99px;
+            background: #009b4d;
+            transition: width 0.4s ease;
+        }
+
+        .confidence-label {
+            font-size: 13px;
+            color: #4b7a5c;
+            margin-top: 4px;
+        }
+
+        .actions {
+            text-align: center;
+            margin-top: 28px;
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .actions a {
+            display: inline-block;
+            padding: 10px 18px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            color: white;
+            background: #2563eb;
+        }
+
+        .actions a.home {
+            background: #2d6a4f;
+        }
+
+        .actions a.retry {
+            background: #009b4d;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page">
+        <h1>Detection Result</h1>
+
+        {% if image_path %}
+        <img class="uploaded-image" src="{{ url_for('static', filename=image_path) }}" alt="Uploaded crop image" />
+        {% endif %}
+
+        <div class="result-card">
+            <div class="label">Plant</div>
+            <div class="value">{{ plant_name }}</div>
+
+            <div class="label">Detected Condition</div>
+            <div class="value {% if disease_name | lower == 'healthy' %}healthy{% else %}diseased{% endif %}">
+                {{ disease_name }}
+            </div>
+
+            <div class="label">Model Confidence</div>
+            <div class="confidence-bar-wrap">
+                <div class="confidence-bar"></div>
+            </div>
+            <div class="confidence-label">{{ confidence }}%</div>
+        </div>
+
+        <div class="actions">
+            <a href="{{ url_for('home') }}" class="home">Home</a>
+            <a href="{{ url_for('index') }}" class="retry">Check Another</a>
+            <a href="{{ url_for('crop_info') }}">CropInfo</a>
+        </div>
+    </div>
+</body>
+
+</html>

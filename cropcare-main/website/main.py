@@ -1,4 +1,4 @@
-from flask import Flask, render_template,request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash
 import os
 from flask_wtf import FlaskForm
 from wtforms import FileField, SubmitField
@@ -6,61 +6,95 @@ import requests
 from bs4 import BeautifulSoup
 from werkzeug.utils import secure_filename
 from wtforms.validators import InputRequired
-import os
 import json
 from PIL import Image
 import numpy as np
-import tensorflow as tf
+import torch
+import torch.nn as nn
+from torchvision import transforms, models
 import re
 from html import escape
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
 
 working_dir = os.path.dirname(os.path.abspath(__file__))
-model_path = os.path.join(working_dir, "plant_disease_prediction_model.h5")
+model_path = os.path.join(working_dir, "best_model.pth")  # FIX 1: was MODEL_PATH (undefined), now model_path
 class_indices_path = os.path.join(working_dir, "class_indices.json")
 upload_folder = os.path.join(working_dir, "static", "uploads")
 
 # Load the pre-trained model when available
 model = None
-model_load_error = None
+MODEL_LOAD_ERROR = None
+
+label_map = {
+    'Potato___Early_blight': 0,
+    'Potato___Late_blight': 1,
+    'Potato___healthy': 2,
+    'Tomato___Bacterial_spot': 3,
+    'Tomato___Early_blight': 4,
+    'Tomato___Late_blight': 5,
+    'Tomato___Leaf_Mold': 6,
+    'Tomato___Septoria_leaf_spot': 7,
+    'Tomato___Spider_mites Two-spotted_spider_mite': 8,
+    'Tomato___Target_Spot': 9,
+    'Tomato___Tomato_Yellow_Leaf_Curl_Virus': 10,
+    'Tomato___Tomato_mosaic_virus': 11,
+    'Tomato___healthy': 12
+}
+
+reverse_label_map = {int(v): k for k, v in label_map.items()}
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+val_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+
+def format_prediction_details(predicted_class):
+    plant_name, _, disease_name = predicted_class.partition("___")
+    disease_name = disease_name.replace("_", " ")
+    return plant_name, disease_name
+
+
+def build_model():
+    m = models.efficientnet_b0(weights=None)
+    m.classifier[1] = nn.Linear(m.classifier[1].in_features, len(label_map))
+    state_dict = torch.load(model_path, map_location=DEVICE)  # FIX 1: MODEL_PATH -> model_path
+    m.load_state_dict(state_dict)
+    m.to(DEVICE)
+    m.eval()
+    return m
+
 
 try:
-    if os.path.exists(model_path) and os.path.getsize(model_path) > 0:
-        model = tf.keras.models.load_model(model_path)
-    else:
-        model_load_error = f"Model file is missing or empty: {model_path}"
+    model = build_model()
+    MODEL_LOAD_ERROR = None
 except Exception as exc:
-    model_load_error = str(exc)
-
-# loading the class names
-with open(class_indices_path, "r", encoding="utf-8") as class_file:
-    class_indices = json.load(class_file)
+    model = None
+    MODEL_LOAD_ERROR = str(exc)
 
 
+def predict_disease(filepath):
+    if model is None:
+        raise RuntimeError(f"Model unavailable: {MODEL_LOAD_ERROR}")
 
-# Function to Load and Preprocess the Image using Pillow
-def load_and_preprocess_image(image_path, target_size=(224, 224)):
-    # Load the image
-    img = Image.open(image_path)
-    # Resize the image
-    img = img.resize(target_size)
-    # Convert the image to a numpy array
-    img_array = np.array(img)
-    # Add batch dimension
-    img_array = np.expand_dims(img_array, axis=0)
-    # Scale the image values to [0, 1]
-    img_array = img_array.astype('float32') / 255.
-    return img_array
+    image = Image.open(filepath).convert("RGB")
+    tensor = val_transform(image).unsqueeze(0).to(DEVICE)
 
+    with torch.no_grad():
+        outputs = model(tensor)
+        probabilities = torch.softmax(outputs, dim=1)
+        class_id = torch.argmax(probabilities, dim=1).item()
+        confidence = probabilities[0][class_id].item() * 100
 
-# Function to Predict the Class of an Image
-def predict_image_class(model, image_path, class_indices):
-    preprocessed_img = load_and_preprocess_image(image_path)
-    predictions = model.predict(preprocessed_img)
-    predicted_class_index = np.argmax(predictions, axis=1)[0]
-    predicted_class_name = class_indices[str(predicted_class_index)]
-    return predicted_class_name
+    predicted_class = reverse_label_map[class_id]
+    return predicted_class, confidence
 
 
 BROWSER_HEADERS = {
@@ -1241,13 +1275,19 @@ def get_crop_details(crop_name, preferred_season="Current season", location=""):
     }
 
 
+# ── Flask app ──────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'asndjasnd'
-app.config['UPLOAD_FOLDER'] = upload_folder
+app.config['UPLOAD_FOLDER'] = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "static",
+    "uploads"
+)
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -1280,26 +1320,38 @@ def crop_info():
 @app.route('/ai', methods=['GET', 'POST'])
 def index():
     form = UploadFileForm()
+
     if form.validate_on_submit():
         file = form.file.data
-        filename = secure_filename(file.filename)
 
-        if not filename or not allowed_file(filename):
+        # FIX 2: check extension on the ORIGINAL filename, before prepending timestamp
+        original_filename = secure_filename(file.filename)
+        if not allowed_file(original_filename):
             flash("Please upload a PNG, JPG, JPEG, or GIF image.")
             return redirect(url_for('index'))
 
+        # FIX 3: use MODEL_LOAD_ERROR (correct casing) instead of model_load_error
         if model is None:
-            flash(f"Prediction model is unavailable. {model_load_error or ''}".strip())
+            flash(f"Prediction model is unavailable. {MODEL_LOAD_ERROR or ''}".strip())
             return redirect(url_for('index'))
 
+        filename = str(datetime.now().timestamp()) + "_" + original_filename
         uploaded_image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(uploaded_image_path)
-        print("File uploaded")
 
-        prediction = predict_image_class(model, uploaded_image_path, class_indices)
-        return f"<h1>{prediction}</h1>"
+        predicted_class, confidence = predict_disease(uploaded_image_path)
+        plant_name, disease_name = format_prediction_details(predicted_class)
+
+        return render_template(
+            "result.html",
+            plant_name=plant_name,
+            disease_name=disease_name,
+            confidence=round(confidence, 2),
+            image_path=f"uploads/{filename}",
+        )
 
     return render_template("ai.html", form=form)
+
 
 if __name__ == '__main__':
     app.run(debug=True)
